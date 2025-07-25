@@ -1,0 +1,531 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Run tests
+      run: cargo test --verbose
+
+  build:
+    name: Build for ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: test
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary_name: optics-ring-generator
+            archive_name: optics-ring-generator-linux-x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_name: optics-ring-generator.exe
+            archive_name: optics-ring-generator-windows-x86_64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary_name: optics-ring-generator
+            archive_name: optics-ring-generator-macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            binary_name: optics-ring-generator
+            archive_name: optics-ring-generator-macos-aarch64
+
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+    
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    
+    - name: Build binary
+      run: cargo build --release --target ${{ matrix.target }}
+    
+    - name: Create archive (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        mkdir -p dist
+        cp target/${{ matrix.target }}/release/${{ matrix.binary_name }} dist/
+        cd dist
+        tar -czf ${{ matrix.archive_name }}.tar.gz ${{ matrix.binary_name }}
+    
+    - name: Create archive (Windows)
+      if: matrix.os == 'windows-latest'
+      run: |
+        mkdir dist
+        copy target\${{ matrix.target }}\release\${{ matrix.binary_name }} dist\
+        cd dist
+        7z a ${{ matrix.archive_name }}.zip ${{ matrix.binary_name }}
+    
+    - name: Upload binary artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.archive_name }}
+        path: |
+          dist/${{ matrix.binary_name }}
+          dist/${{ matrix.archive_name }}.*
+
+  create-installers:
+    name: Create Installers
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+    
+    - name: Install PowerShell
+      run: |
+        # Install PowerShell on Ubuntu
+        wget -q https://packages.microsoft.com/config/ubuntu/20.04/packages-microsoft-prod.deb
+        sudo dpkg -i packages-microsoft-prod.deb
+        sudo apt-get update
+        sudo apt-get install -y powershell
+    
+    - name: Create Windows Installer with Embedded Binary
+      run: |
+        # Create installer directory
+        mkdir -p installers
+        
+        # Get Windows binary
+        WINDOWS_BINARY_PATH="optics-ring-generator-windows-x86_64/optics-ring-generator.exe"
+        
+        if [ -f "$WINDOWS_BINARY_PATH" ]; then
+          echo "✅ Windows binary found"
+          BINARY_BASE64=$(base64 -w 0 "$WINDOWS_BINARY_PATH")
+          
+          # Create PowerShell installer with embedded binary
+          cat > installers/OpticsRingGenerator-Windows-Installer.ps1 << 'EOF'
+        # OpticRingGenerator Windows Installer with Embedded Binary
+        # This installer contains the complete application
+        
+        #Requires -RunAsAdministrator
+        
+        param(
+            [switch]$Uninstall
+        )
+        
+        $ErrorActionPreference = "Stop"
+        
+        # Configuration
+        $AppName = "OpticRingGenerator"
+        $Publisher = "OpticRingGenerator"
+        $Version = "1.0.0"
+        $InstallDir = "$env:ProgramFiles\$AppName"
+        $StartMenuFolder = "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\$AppName"
+        $DesktopShortcut = "$env:PUBLIC\Desktop\$AppName.lnk"
+        $BinaryName = "optics-ring-generator.exe"
+        
+        function Write-ColorText {
+            param([string]$Text, [string]$Color = "White")
+            Write-Host $Text -ForegroundColor $Color
+        }
+        
+        function Test-Administrator {
+            $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $principal = New-Object Security.Principal.WindowsPrincipal($currentUser)
+            return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        }
+        
+        if (-not (Test-Administrator)) {
+            Write-ColorText "❌ This installer must be run as Administrator!" "Red"
+            Write-ColorText "   Right-click on PowerShell and select 'Run as Administrator'" "Yellow"
+            Read-Host "Press Enter to exit"
+            exit 1
+        }
+        
+        if ($Uninstall) {
+            Write-ColorText "🗑️  Uninstalling $AppName..." "Yellow"
+            
+            # Remove files
+            if (Test-Path $InstallDir) {
+                Remove-Item -Path $InstallDir -Recurse -Force
+                Write-ColorText "✅ Removed installation directory" "Green"
+            }
+            
+            # Remove shortcuts
+            if (Test-Path $DesktopShortcut) {
+                Remove-Item -Path $DesktopShortcut -Force
+                Write-ColorText "✅ Removed desktop shortcut" "Green"
+            }
+            
+            if (Test-Path $StartMenuFolder) {
+                Remove-Item -Path $StartMenuFolder -Recurse -Force
+                Write-ColorText "✅ Removed start menu entries" "Green"
+            }
+            
+            # Remove from registry
+            $regPath = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$AppName"
+            if (Test-Path $regPath) {
+                Remove-Item -Path $regPath -Force
+                Write-ColorText "✅ Removed registry entries" "Green"
+            }
+            
+            # Remove from PATH
+            $currentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+            if ($currentPath -like "*$InstallDir*") {
+                $newPath = $currentPath -replace [regex]::Escape(";$InstallDir"), ""
+                $newPath = $newPath -replace [regex]::Escape("$InstallDir;"), ""
+                $newPath = $newPath -replace [regex]::Escape("$InstallDir"), ""
+                [Environment]::SetEnvironmentVariable("Path", $newPath, "Machine")
+                Write-ColorText "✅ Removed from system PATH" "Green"
+            }
+            
+            Write-ColorText "🎉 $AppName has been successfully uninstalled!" "Green"
+            Read-Host "Press Enter to exit"
+            exit 0
+        }
+        
+        Write-ColorText "🚀 Installing $AppName v$Version..." "Cyan"
+        Write-ColorText "   Publisher: $Publisher" "Gray"
+        Write-ColorText "   Install Location: $InstallDir" "Gray"
+        Write-ColorText ""
+        
+        # Create installation directory
+        Write-ColorText "📁 Creating installation directory..." "Yellow"
+        if (-not (Test-Path $InstallDir)) {
+            New-Item -Path $InstallDir -ItemType Directory -Force | Out-Null
+        }
+        
+        # Extract embedded binary
+        Write-ColorText "📦 Extracting application binary..." "Yellow"
+        $binaryPath = "$InstallDir\$BinaryName"
+        
+        # Embedded binary data (base64 encoded)
+        $binaryData = @"
+        BINARY_BASE64_PLACEHOLDER
+        "@
+        
+        try {
+            $binaryBytes = [System.Convert]::FromBase64String($binaryData)
+            [System.IO.File]::WriteAllBytes($binaryPath, $binaryBytes)
+            Write-ColorText "✅ Binary extracted successfully" "Green"
+        } catch {
+            Write-ColorText "❌ Failed to extract binary: $($_.Exception.Message)" "Red"
+            exit 1
+        }
+        
+        # Add to system PATH
+        Write-ColorText "🔗 Adding to system PATH..." "Yellow"
+        $currentPath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+        if ($currentPath -notlike "*$InstallDir*") {
+            $newPath = "$currentPath;$InstallDir"
+            [Environment]::SetEnvironmentVariable("Path", $newPath, "Machine")
+            Write-ColorText "✅ Added to system PATH" "Green"
+        }
+        
+        # Create Start Menu shortcuts
+        Write-ColorText "📎 Creating shortcuts..." "Yellow"
+        if (-not (Test-Path $StartMenuFolder)) {
+            New-Item -Path $StartMenuFolder -ItemType Directory -Force | Out-Null
+        }
+        
+        $WshShell = New-Object -comObject WScript.Shell
+        
+        # Start Menu shortcut
+        $StartMenuShortcut = $WshShell.CreateShortcut("$StartMenuFolder\$AppName.lnk")
+        $StartMenuShortcut.TargetPath = $binaryPath
+        $StartMenuShortcut.WorkingDirectory = $InstallDir
+        $StartMenuShortcut.Description = "3D Printable Precision Optics Support Ring Generator"
+        $StartMenuShortcut.Arguments = "--ui"
+        $StartMenuShortcut.Save()
+        
+        # Start Menu CLI shortcut
+        $StartMenuCLIShortcut = $WshShell.CreateShortcut("$StartMenuFolder\$AppName (CLI).lnk")
+        $StartMenuCLIShortcut.TargetPath = "cmd.exe"
+        $StartMenuCLIShortcut.WorkingDirectory = $env:USERPROFILE
+        $StartMenuCLIShortcut.Description = "OpticRingGenerator Command Line Interface"
+        $StartMenuCLIShortcut.Arguments = "/k echo OpticRingGenerator CLI - Type 'optics-ring-generator --help' for usage"
+        $StartMenuCLIShortcut.Save()
+        
+        # Desktop shortcut
+        $DesktopShortcutObj = $WshShell.CreateShortcut($DesktopShortcut)
+        $DesktopShortcutObj.TargetPath = $binaryPath
+        $DesktopShortcutObj.WorkingDirectory = $InstallDir
+        $DesktopShortcutObj.Description = "3D Printable Precision Optics Support Ring Generator"
+        $DesktopShortcutObj.Arguments = "--ui"
+        $DesktopShortcutObj.Save()
+        
+        # Add to Windows Programs and Features
+        Write-ColorText "📋 Registering with Windows..." "Yellow"
+        $regPath = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$AppName"
+        New-Item -Path $regPath -Force | Out-Null
+        Set-ItemProperty -Path $regPath -Name "DisplayName" -Value $AppName
+        Set-ItemProperty -Path $regPath -Name "DisplayVersion" -Value $Version
+        Set-ItemProperty -Path $regPath -Name "Publisher" -Value $Publisher
+        Set-ItemProperty -Path $regPath -Name "InstallLocation" -Value $InstallDir
+        Set-ItemProperty -Path $regPath -Name "UninstallString" -Value "powershell.exe -ExecutionPolicy Bypass -File `"$($MyInvocation.MyCommand.Path)`" -Uninstall"
+        Set-ItemProperty -Path $regPath -Name "DisplayIcon" -Value $binaryPath
+        Set-ItemProperty -Path $regPath -Name "NoModify" -Value 1
+        Set-ItemProperty -Path $regPath -Name "NoRepair" -Value 1
+        Set-ItemProperty -Path $regPath -Name "EstimatedSize" -Value 5000
+        
+        Write-ColorText ""
+        Write-ColorText "🎉 Installation completed successfully!" "Green"
+        Write-ColorText ""
+        Write-ColorText "📋 Installation Summary:" "Cyan"
+        Write-ColorText "   • Program installed to: $InstallDir" "White"
+        Write-ColorText "   • Added to system PATH" "White"
+        Write-ColorText "   • Desktop shortcut created" "White"
+        Write-ColorText "   • Start menu entries created" "White"
+        Write-ColorText "   • Registered in Programs and Features" "White"
+        Write-ColorText ""
+        Write-ColorText "🚀 You can now run $AppName:" "Cyan"
+        Write-ColorText "   • Double-click desktop shortcut (UI mode)" "White"
+        Write-ColorText "   • Start Menu → $AppName (UI mode)" "White"
+        Write-ColorText "   • Start Menu → $AppName (CLI)" "White"
+        Write-ColorText "   • Command line: optics-ring-generator" "White"
+        Write-ColorText "   • Command line UI: optics-ring-generator --ui" "White"
+        Write-ColorText ""
+        Write-ColorText "📖 Usage Examples:" "Cyan"
+        Write-ColorText "   optics-ring-generator --help" "White"
+        Write-ColorText "   optics-ring-generator CX --outer-diameter 30 --inner-diameter 25" "White"
+        Write-ColorText "   optics-ring-generator --ui" "White"
+        Write-ColorText ""
+        Write-ColorText "ℹ️  To uninstall:" "Gray"
+        Write-ColorText "   • Use Windows Settings → Apps & features, or" "Gray"
+        Write-ColorText "   • Run this installer with -Uninstall parameter" "Gray"
+        Write-ColorText ""
+        
+        Read-Host "Press Enter to exit"
+        EOF
+          
+          # Replace placeholder with actual binary data
+          sed -i "s/BINARY_BASE64_PLACEHOLDER/$BINARY_BASE64/" installers/OpticsRingGenerator-Windows-Installer.ps1
+          
+          echo "✅ Created Windows installer with embedded binary"
+        else
+          echo "❌ Windows binary not found at $WINDOWS_BINARY_PATH"
+          exit 1
+        fi
+    
+    - name: Create macOS Installer
+      run: |
+        # Get macOS binaries
+        MACOS_X64_BINARY="optics-ring-generator-macos-x86_64/optics-ring-generator"
+        MACOS_ARM64_BINARY="optics-ring-generator-macos-aarch64/optics-ring-generator"
+        
+        # Create universal binary if both architectures are available
+        if [ -f "$MACOS_X64_BINARY" ] && [ -f "$MACOS_ARM64_BINARY" ]; then
+          echo "✅ Creating universal macOS binary"
+          lipo -create "$MACOS_X64_BINARY" "$MACOS_ARM64_BINARY" -output installers/optics-ring-generator-universal
+          MACOS_BINARY="installers/optics-ring-generator-universal"
+        elif [ -f "$MACOS_X64_BINARY" ]; then
+          echo "✅ Using x86_64 macOS binary"
+          cp "$MACOS_X64_BINARY" installers/optics-ring-generator-macos
+          MACOS_BINARY="installers/optics-ring-generator-macos"
+        elif [ -f "$MACOS_ARM64_BINARY" ]; then
+          echo "✅ Using ARM64 macOS binary"
+          cp "$MACOS_ARM64_BINARY" installers/optics-ring-generator-macos
+          MACOS_BINARY="installers/optics-ring-generator-macos"
+        else
+          echo "❌ No macOS binaries found"
+          exit 1
+        fi
+        
+        # Create macOS installer with embedded binary
+        MACOS_BINARY_BASE64=$(base64 -w 0 "$MACOS_BINARY")
+        
+        cat > installers/OpticsRingGenerator-macOS-Installer.sh << EOF
+        #!/bin/bash
+        
+        # OpticRingGenerator macOS Installer
+        # This installer contains the embedded binary
+        
+        set -e
+        
+        APP_NAME="OpticRingGenerator"
+        INSTALL_DIR="/usr/local/bin"
+        BINARY_NAME="optics-ring-generator"
+        
+        echo "🚀 Installing \$APP_NAME..."
+        
+        # Check if running as root for system-wide installation
+        if [[ \$EUID -ne 0 ]]; then
+            echo "⚠️  Not running as root. Installing to ~/bin instead of /usr/local/bin"
+            INSTALL_DIR="\$HOME/bin"
+            mkdir -p "\$INSTALL_DIR"
+        fi
+        
+        # Decode and install binary
+        echo "📦 Extracting binary..."
+        cat << 'BINARY_EOF' | base64 -d > "\$INSTALL_DIR/\$BINARY_NAME"
+        $MACOS_BINARY_BASE64
+        BINARY_EOF
+        
+        # Make executable
+        chmod +x "\$INSTALL_DIR/\$BINARY_NAME"
+        
+        # Add to PATH if installing to ~/bin
+        if [[ "\$INSTALL_DIR" == "\$HOME/bin" ]]; then
+            if [[ ":\$PATH:" != *":\$HOME/bin:"* ]]; then
+                echo "📝 Adding \$HOME/bin to PATH in ~/.zshrc"
+                echo 'export PATH="\$HOME/bin:\$PATH"' >> ~/.zshrc
+                echo "ℹ️  Please run 'source ~/.zshrc' or restart your terminal"
+            fi
+        fi
+        
+        echo "✅ \$APP_NAME installed successfully!"
+        echo "🚀 You can now run: \$BINARY_NAME"
+        echo ""
+        echo "📋 Usage examples:"
+        echo "   \$BINARY_NAME --help"
+        echo "   \$BINARY_NAME CX --outer-diameter 30 --inner-diameter 25"
+        echo "   \$BINARY_NAME --ui"
+        echo ""
+        EOF
+        
+        chmod +x installers/OpticsRingGenerator-macOS-Installer.sh
+        echo "✅ Created macOS installer with embedded binary"
+    
+    - name: Create Linux Installer
+      run: |
+        # Get Linux binary
+        LINUX_BINARY="optics-ring-generator-linux-x86_64/optics-ring-generator"
+        
+        if [ -f "$LINUX_BINARY" ]; then
+          echo "✅ Creating Linux installer"
+          LINUX_BINARY_BASE64=$(base64 -w 0 "$LINUX_BINARY")
+          
+          cat > installers/OpticsRingGenerator-Linux-Installer.sh << EOF
+        #!/bin/bash
+        
+        # OpticRingGenerator Linux Installer
+        # This installer contains the embedded binary
+        
+        set -e
+        
+        APP_NAME="OpticRingGenerator"
+        INSTALL_DIR="/usr/local/bin"
+        BINARY_NAME="optics-ring-generator"
+        
+        echo "🚀 Installing \$APP_NAME..."
+        
+        # Check if running as root for system-wide installation
+        if [[ \$EUID -ne 0 ]]; then
+            echo "⚠️  Not running as root. Installing to ~/.local/bin instead of /usr/local/bin"
+            INSTALL_DIR="\$HOME/.local/bin"
+            mkdir -p "\$INSTALL_DIR"
+        fi
+        
+        # Decode and install binary
+        echo "📦 Extracting binary..."
+        cat << 'BINARY_EOF' | base64 -d > "\$INSTALL_DIR/\$BINARY_NAME"
+        $LINUX_BINARY_BASE64
+        BINARY_EOF
+        
+        # Make executable
+        chmod +x "\$INSTALL_DIR/\$BINARY_NAME"
+        
+        # Add to PATH if installing to ~/.local/bin
+        if [[ "\$INSTALL_DIR" == "\$HOME/.local/bin" ]]; then
+            if [[ ":\$PATH:" != *":\$HOME/.local/bin:"* ]]; then
+                echo "📝 Adding \$HOME/.local/bin to PATH in ~/.bashrc"
+                echo 'export PATH="\$HOME/.local/bin:\$PATH"' >> ~/.bashrc
+                echo "ℹ️  Please run 'source ~/.bashrc' or restart your terminal"
+            fi
+        fi
+        
+        echo "✅ \$APP_NAME installed successfully!"
+        echo "🚀 You can now run: \$BINARY_NAME"
+        echo ""
+        echo "📋 Usage examples:"
+        echo "   \$BINARY_NAME --help"
+        echo "   \$BINARY_NAME CX --outer-diameter 30 --inner-diameter 25"
+        echo "   \$BINARY_NAME --ui"
+        echo ""
+        EOF
+          
+          chmod +x installers/OpticsRingGenerator-Linux-Installer.sh
+          echo "✅ Created Linux installer with embedded binary"
+        else
+          echo "❌ Linux binary not found at $LINUX_BINARY"
+        fi
+    
+    - name: Upload installer artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: installers
+        path: installers/
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build, create-installers]
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          */optics-ring-generator*
+          installers/*
+        body: |
+          ## OpticRingGenerator Release
+          
+          ### 🚀 Single-File Installers
+          
+          **Windows**: Download `OpticsRingGenerator-Windows-Installer.ps1` and run as Administrator
+          **macOS**: Download `OpticsRingGenerator-macOS-Installer.sh` and run in Terminal
+          **Linux**: Download `OpticsRingGenerator-Linux-Installer.sh` and run in Terminal
+          
+          ### 📦 Standalone Binaries
+          
+          For manual installation, download the appropriate binary for your platform.
+          
+          ### 📋 Usage
+          
+          ```bash
+          # Interactive UI mode
+          optics-ring-generator --ui
+          
+          # Command line examples
+          optics-ring-generator CX --outer-diameter 30 --inner-diameter 25
+          optics-ring-generator CC --outer-diameter 40 --inner-diameter 35
+          optics-ring-generator 3P --outer-diameter 20 --inner-diameter 15
+          ```
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

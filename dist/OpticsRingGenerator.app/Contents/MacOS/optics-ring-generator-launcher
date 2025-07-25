@@ -1,0 +1,28 @@
+#!/bin/bash
+
+# Get the directory of this app bundle
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BINARY_PATH="$APP_DIR/MacOS/optics-ring-generator"
+
+# Create a temporary script that will run in Terminal
+TEMP_SCRIPT=$(mktemp)
+cat > "$TEMP_SCRIPT" << INNER_EOF
+#!/bin/bash
+echo "🔬 Optics Ring Generator"
+echo "======================="
+echo "Launching interactive UI mode..."
+echo
+"$BINARY_PATH" --ui
+echo
+echo "Press Enter to close this window..."
+read
+INNER_EOF
+
+chmod +x "$TEMP_SCRIPT"
+
+# Open Terminal and run our script
+osascript -e "tell application \"Terminal\" to do script \"$TEMP_SCRIPT; exit\""
+
+# Clean up
+sleep 1
+rm "$TEMP_SCRIPT"

@@ -1,0 +1,66 @@
+# Compiled binaries and build artifacts
+/target/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Debug and release builds
+/target/debug/
+/target/release/
+
+# Cargo lock file (include in version control for applications)
+# Cargo.lock
+
+# Rust toolchain metadata
+.rustup/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# Log files
+*.log
+
+# Test output
+/test_output/
+
+# STL files (generated outputs)
+*.stl
+
+# Distribution files (keeping installers in repo for now)
+# /dist/
+
+# Backup files
+*.bak
+*.backup
+
+# Node modules (if any JS tools are added)
+node_modules/
+
+# Python cache (if any Python tools are added)
+__pycache__/
+*.pyc
+
+# Local configuration
+.env
+.env.local
