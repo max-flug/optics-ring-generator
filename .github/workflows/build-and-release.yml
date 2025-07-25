@@ -20,7 +20,7 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
     - name: Cache dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/bin/
@@ -47,11 +47,11 @@ jobs:
             target: x86_64-pc-windows-msvc
             binary_name: optics-ring-generator.exe
             archive_name: optics-ring-generator-windows-x86_64
-          - os: macos-latest
+          - os: macos-13
             target: x86_64-apple-darwin
             binary_name: optics-ring-generator
             archive_name: optics-ring-generator-macos-x86_64
-          - os: macos-latest
+          - os: macos-14
             target: aarch64-apple-darwin
             binary_name: optics-ring-generator
             archive_name: optics-ring-generator-macos-aarch64
@@ -65,7 +65,7 @@ jobs:
         targets: ${{ matrix.target }}
     
     - name: Cache dependencies
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/bin/
@@ -95,7 +95,7 @@ jobs:
         7z a ${{ matrix.archive_name }}.zip ${{ matrix.binary_name }}
     
     - name: Upload binary artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.archive_name }}
         path: |
@@ -110,7 +110,7 @@ jobs:
     - uses: actions/checkout@v4
     
     - name: Download all artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
     
     - name: Install PowerShell
       run: |
@@ -481,7 +481,7 @@ jobs:
         fi
     
     - name: Upload installer artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: installers
         path: installers/
@@ -495,7 +495,7 @@ jobs:
     - uses: actions/checkout@v4
     
     - name: Download all artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
     
     - name: Create Release
       uses: softprops/action-gh-release@v1
